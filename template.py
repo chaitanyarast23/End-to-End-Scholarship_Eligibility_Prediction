@@ -10,7 +10,7 @@ list_of_fies=[
     f"src/{project_name}/__init__.py",
     f"src/{project_name}/Components/__init__.py",
     f"src/{project_name}/Components/data_ingestion.py",
-    f"src/{project_name}/Components/data_tranformation.py",
+    f"src/{project_name}/Components/data_transformation.py",
     f"src/{project_name}/Components/model_trainer.py",
     f"src/{project_name}/Components/model_monitering.py",
     f"src/{project_name}/pipelines/__init__.py",
