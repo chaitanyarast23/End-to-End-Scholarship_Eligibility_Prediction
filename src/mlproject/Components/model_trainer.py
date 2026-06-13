@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 from dataclasses import dataclass
 
 from src.mlproject.exception import CustomException
@@ -12,7 +13,16 @@ from sklearn.ensemble import RandomForestClassifier
 from xgboost import XGBClassifier
 from catboost import CatBoostClassifier
 from sklearn.neighbors import KNeighborsClassifier
-from sklearn.metrics import accuracy_score
+
+from sklearn.metrics import (
+    accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
+    roc_auc_score,
+    confusion_matrix,
+    classification_report
+)
 
 import dagshub
 import mlflow
@@ -46,11 +56,11 @@ class ModelTrainer:
 
             models = {
                 'Logistic Regression': LogisticRegression(random_state=42),
-                'Decision Tree': DecisionTreeClassifier(random_state=42),
-                'Random Forest': RandomForestClassifier(random_state=42),
-                'XGBoost': XGBClassifier(random_state=42, eval_metric='logloss'),
-                'CatBoost': CatBoostClassifier(random_state=42, verbose=0),
-                'K-Neighbors': KNeighborsClassifier()
+                'Decision Tree':       DecisionTreeClassifier(random_state=42),
+                'Random Forest':       RandomForestClassifier(random_state=42),
+                'XGBoost':             XGBClassifier(random_state=42, eval_metric='logloss'),
+                'CatBoost':            CatBoostClassifier(random_state=42, verbose=0),
+                'K-Neighbors':         KNeighborsClassifier()
             }
 
             params = {
@@ -93,35 +103,65 @@ class ModelTrainer:
                 }
             }
 
-            # evaluate_models should run GridSearchCV and return test accuracy per model
+            # evaluate_models now returns F1 scores
             model_report: dict = evaluate_models(X_train, y_train, X_test, y_test, models, params)
 
             best_model_score = max(model_report.values())
-            best_model_name = max(model_report, key=model_report.get)
-            best_model = models[best_model_name]
+            best_model_name  = max(model_report, key=model_report.get)
+            best_model       = models[best_model_name]
 
-            logging.info(f"Best model: {best_model_name} with score: {best_model_score}")
+            logging.info(f"Best model: {best_model_name} | F1: {best_model_score:.4f}")
 
             if best_model_score < 0.6:
-                raise CustomException("No best model found — all models below 0.6 accuracy", sys)
+                raise CustomException("No best model found — all models below F1 0.6", sys)
 
-            # ✅ Calculate accuracy BEFORE mlflow block
-            predicted = best_model.predict(X_test)
-            acc = accuracy_score(y_test, predicted)
+            
+            predicted       = best_model.predict(X_test)
+            predicted_proba = best_model.predict_proba(X_test)[:, 1]
 
-            # ✅ Log to MLflow / DagsHub
+            acc       = accuracy_score(y_test, predicted)
+            precision = precision_score(y_test, predicted)
+            recall    = recall_score(y_test, predicted)
+            f1        = f1_score(y_test, predicted)
+            roc_auc   = roc_auc_score(y_test, predicted_proba)
+
+            
             with mlflow.start_run():
-                mlflow.log_param("model_name", best_model_name)
-                mlflow.log_params(best_model.get_params())  # log all hyperparams
-                mlflow.log_metric("accuracy", acc)
 
-                # ✅ Use mlflow.sklearn for all models (works for XGBoost/CatBoost too via sklearn wrapper)
+                # Params
+                mlflow.log_param("model_name", best_model_name)
+                mlflow.log_params(best_model.get_params())
+
+                # Metrics
+                mlflow.log_metric("accuracy",  acc)
+                mlflow.log_metric("precision", precision)
+                mlflow.log_metric("recall",    recall)
+                mlflow.log_metric("f1_score",  f1)
+                mlflow.log_metric("roc_auc",   roc_auc)
+
+                # Confusion matrix as artifact
+                cm = confusion_matrix(y_test, predicted).tolist()
+                with open("confusion_matrix.json", "w") as f:
+                    json.dump({"confusion_matrix": cm}, f, indent=2)
+                mlflow.log_artifact("confusion_matrix.json")
+
+                # Classification report as artifact
+                report_str = classification_report(y_test, predicted)
+                with open("classification_report.txt", "w") as f:
+                    f.write(f"Model: {best_model_name}\n\n")
+                    f.write(report_str)
+                mlflow.log_artifact("classification_report.txt")
+
+                # Model
                 mlflow.sklearn.log_model(
                     sk_model=best_model,
                     artifact_path="model"
                 )
 
-            logging.info(f"MLflow run logged successfully. Accuracy: {acc}")
+            logging.info(
+                f"MLflow run logged | Acc: {acc:.4f} | P: {precision:.4f} | "
+                f"R: {recall:.4f} | F1: {f1:.4f} | ROC-AUC: {roc_auc:.4f}"
+            )
 
             save_object(
                 file_path=self.model_trainer_config.trained_model_config,
