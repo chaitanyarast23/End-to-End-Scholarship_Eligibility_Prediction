@@ -1,26 +1,73 @@
-from src.mlproject.logger import logging 
+from flask import Flask, request, jsonify, render_template
+from src.mlproject.pipelines.prediction_pipeline import PredictPipeline, CustomData
+from src.mlproject.logger import logging
 from src.mlproject.exception import CustomException
-from src.mlproject.Components.data_ingestion import Data_Ingestion
-from src.mlproject.Components.data_transformation import DataTransformation
-from src.mlproject.Components.model_trainer import ModelTrainer
-import sys
+import os, sys
+
+app = Flask(__name__)
 
 
-if __name__=="__main__":
-    logging.info("The exicution is Started")
+@app.route("/", methods=["GET"])
+def home():
+    return render_template("index.html")
 
+
+@app.route("/predict", methods=["POST"])
+def predict():
     try:
-        data_ingestion=Data_Ingestion()
-        train_path,test_path=data_ingestion.initate_Data_ingestion()
+        body = request.get_json()
 
-        data_transformation=DataTransformation()
-        train_arr, test_arr,preprocess_path=data_transformation.initiate_data_transformation(train_path,test_path)
+        if not body:
+            return jsonify({"status": "error", "message": "No input data provided"}), 400
 
-        model_trainer=ModelTrainer()
-        x=model_trainer.initiate_model_trainer(train_arr,test_arr)
-        print(x)
+        # ── Validate required fields ──────────────────
+        required = [
+            "gender", "nationality", "age",
+            "english_grade", "math_grade", "sciences_grade",
+            "language_grade", "portfolio_rating",
+            "coverletter_rating", "refletter_rating"
+        ]
+        missing = [f for f in required if body.get(f) is None]
+        if missing:
+            return jsonify({
+                "status" : "error",
+                "message": f"Missing fields: {missing}"
+            }), 400
 
-    except Exception as e :
-        logging.info("CustomException Occur")
-        raise CustomException(e,sys)
+        
+        data = CustomData(
+            gender             = str(body["gender"]),
+            nationality        = str(body["nationality"]),
+            age                = int(body["age"]),
+            english_grade      = float(body["english_grade"]),
+            math_grade         = float(body["math_grade"]),
+            sciences_grade     = float(body["sciences_grade"]),
+            language_grade     = float(body["language_grade"]),
+            portfolio_rating   = float(body["portfolio_rating"]),
+            coverletter_rating = float(body["coverletter_rating"]),
+            refletter_rating   = float(body["refletter_rating"]),
+        )
 
+        df                = data.get_data_as_dataframe()
+        pipeline          = PredictPipeline()
+        prediction, proba = pipeline.predict(df)
+
+        result = "Eligible" if int(prediction[0]) == 1 else "Not Eligible"
+
+        logging.info(f"Prediction: {result} | Confidence: {proba[0]:.4f}")
+
+        return jsonify({
+            "status"    : "success",
+            "prediction": result,
+            "confidence": f"{round(float(proba[0]) * 100, 2)}%"
+        }), 200
+
+    except CustomException as e:
+        logging.error(f"Prediction failed: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=8080, debug=False)
